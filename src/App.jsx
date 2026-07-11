@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Plus, Trash2, Pencil, Wallet, CreditCard, PiggyBank, Banknote, Landmark,
   X, Download, AlertTriangle, Calendar, StickyNote, ChevronDown, ChevronUp,
-  Moon, LogOut,
+  Moon, LogOut, FileText, Sun,
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient';
 
 const ACCOUNT_TYPES = [
@@ -11,7 +13,7 @@ const ACCOUNT_TYPES = [
   { id: 'debito', label: 'Cuenta de débito', icon: Wallet, color: '#6E9FD1' },
   { id: 'credito', label: 'Cuenta de crédito', icon: CreditCard, color: '#E3A66A' },
   { id: 'ahorro', label: 'Ahorro', icon: PiggyBank, color: '#9D7FE8' },
-  { id: 'otro', label: 'Otro', icon: Landmark, color: '#9499A3' },
+  { id: 'otro', label: 'Otro', icon: Landmark, color: 'var(--text-secondary)' },
 ];
 
 function todayStr() {
@@ -60,6 +62,76 @@ export default function App() {
   const [savingDay, setSavingDay] = useState(false);
 
   const [expandedDay, setExpandedDay] = useState(null);
+
+  const [pdfRange, setPdfRange] = useState({ start: '', end: '' });
+  const [pdfError, setPdfError] = useState('');
+
+  const [theme, setTheme] = useState(() => localStorage.getItem('tracker-theme') || 'dark');
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('tracker-theme', theme);
+  }, [theme]);
+
+  function toggleTheme() {
+    setTheme(t => (t === 'dark' ? 'light' : 'dark'));
+  }
+
+  // Inyecta las variables de tema y el fondo neón directo en <head>,
+  // así no depende de que index.css se haya reemplazado bien (evita choques con los estilos por defecto de Vite).
+  useEffect(() => {
+    const styleId = 'tracker-theme-styles';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      :root {
+        --bg-color: #F2F2F7;
+        --card-bg: #FFFFFF;
+        --card-border: #E5E5EA;
+        --card-border-strong: #D1D1D6;
+        --surface-2: #EDEDF2;
+        --text-primary: #1C1C1E;
+        --text-heading: #0B0B0D;
+        --text-label: #3A3A3C;
+        --text-secondary: #6B6B70;
+        --text-muted: #9A9AA0;
+        --text-muted-2: #8A8A90;
+        --accent: #6E56CF;
+        --neon-opacity: 0;
+      }
+      [data-theme='dark'] {
+        --bg-color: #0B0914;
+        --card-bg: #17151F;
+        --card-border: #262433;
+        --card-border-strong: #33313F;
+        --surface-2: #1D1B27;
+        --text-primary: #E8E9EB;
+        --text-heading: #F5F5F7;
+        --text-label: #D5D7DB;
+        --text-secondary: #9499A3;
+        --text-muted: #5A6068;
+        --text-muted-2: #6E747D;
+        --accent: #8A73F0;
+        --neon-opacity: 1;
+      }
+      html, body { margin: 0; background-color: var(--bg-color) !important; transition: background-color 0.3s ease; }
+      .neon-gradient {
+        position: absolute !important;
+        top: -120px; left: -50%; width: 200%; height: 520px;
+        background:
+          radial-gradient(circle at 30% 50%, rgba(0, 238, 255, 0.45), transparent 40%),
+          radial-gradient(circle at 70% 40%, rgba(217, 70, 239, 0.55), transparent 50%),
+          radial-gradient(circle at 50% 65%, rgba(110, 86, 207, 0.55), transparent 50%);
+        filter: blur(70px);
+        z-index: -1;
+        opacity: var(--neon-opacity) !important;
+        transition: opacity 0.4s ease;
+        pointer-events: none;
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
 
   // 1. Sesión de Supabase
   useEffect(() => {
@@ -282,6 +354,77 @@ export default function App() {
     loadAll(sesion.user.id);
   }
 
+  function generateStatementPDF() {
+    setPdfError('');
+    if (!pdfRange.start || !pdfRange.end) { setPdfError('Selecciona una fecha inicial y una final'); return; }
+    if (pdfRange.start > pdfRange.end) { setPdfError('La fecha inicial debe ser anterior a la final'); return; }
+
+    // Iteramos día por día usando componentes locales (evita saltos de un día por zona horaria)
+    const [sy, sm, sd] = pdfRange.start.split('-').map(Number);
+    const [ey, em, ed] = pdfRange.end.split('-').map(Number);
+    const cursor = new Date(sy, sm - 1, sd);
+    const endDate = new Date(ey, em - 1, ed);
+
+    const rows = [];
+    let totalIngresos = 0;
+    let totalGastos = 0;
+
+    while (cursor <= endDate) {
+      const fecha = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+      const dayRecord = days.find(d => d.fecha === fecha);
+
+      if (!dayRecord || dayRecord.sinCambios || (dayRecord.movimientos || []).length === 0) {
+        rows.push([
+          fecha,
+          dayRecord?.sinCambios ? 'Sin cambios' : 'Sin registro',
+          '-',
+          '-',
+          dayRecord?.nota || '',
+        ]);
+      } else {
+        dayRecord.movimientos.forEach((m, idx) => {
+          const acc = accounts.find(a => a.id === m.cuentaId);
+          rows.push([
+            idx === 0 ? fecha : '',
+            `${m.descripcion || (m.tipo === 'gasto' ? 'Gasto' : 'Ingreso')} (${acc ? acc.name : 'Cuenta eliminada'})`,
+            m.tipo === 'ingreso' ? formatMXN(m.monto) : '-',
+            m.tipo === 'gasto' ? formatMXN(m.monto) : '-',
+            idx === 0 ? (dayRecord.nota || '') : '',
+          ]);
+          if (m.tipo === 'ingreso') totalIngresos += m.monto;
+          else totalGastos += m.monto;
+        });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const doc = new jsPDF();
+    doc.setFontSize(14);
+    doc.text(`Estado de cuenta: ${pdfRange.start} al ${pdfRange.end}`, 14, 15);
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(`Generado el ${todayStr()} — ${sesion.user.email}`, 14, 21);
+    doc.setTextColor(0);
+
+    autoTable(doc, {
+      startY: 27,
+      head: [['Fecha', 'Concepto', 'Ingreso', 'Gasto', 'Nota del día']],
+      body: rows,
+      theme: 'grid',
+      headStyles: { fillColor: [110, 86, 207] },
+      styles: { fontSize: 8, cellPadding: 3 },
+      columnStyles: { 4: { cellWidth: 45 } },
+    });
+
+    const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 30;
+    doc.setFontSize(11);
+    doc.text(`Total ingresos: ${formatMXN(totalIngresos)}`, 14, finalY + 10);
+    doc.text(`Total gastos: ${formatMXN(totalGastos)}`, 14, finalY + 17);
+    doc.text(`Balance del periodo: ${formatMXN(totalIngresos - totalGastos)}`, 14, finalY + 24);
+
+    doc.save(`Estado_Cuenta_${pdfRange.start}_al_${pdfRange.end}.pdf`);
+  }
+
   function exportBackup() {
     const payload = { accounts, days, exportado: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -296,22 +439,29 @@ export default function App() {
   // ---------- Pantallas de carga / login ----------
   if (checkingSesion) {
     return (
-      <div style={{ minHeight: '100vh', background: '#0F1115', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
-        <div style={{ color: '#8A9099' }}>Cargando…</div>
+      <div style={{ minHeight: '100vh', background: 'var(--bg-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
+        <div style={{ color: 'var(--text-secondary)' }}>Cargando…</div>
       </div>
     );
   }
 
   if (!sesion) {
     return (
-      <div style={{ minHeight: '100vh', background: '#0F1115', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
-        <div style={{ fontSize: 13, letterSpacing: 1.5, color: '#6E56CF', fontWeight: 600, textTransform: 'uppercase', marginBottom: 10 }}>
+      <div style={{ minHeight: '100vh', background: 'transparent', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
+        <div className="neon-gradient" />
+        <button
+          onClick={toggleTheme}
+          style={{ position: 'absolute', top: 20, right: 20, width: 40, height: 40, borderRadius: 20, border: '1px solid var(--card-border)', background: 'var(--card-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 }}
+        >
+          {theme === 'dark' ? <Sun size={16} color="var(--text-primary)" /> : <Moon size={16} color="var(--text-primary)" />}
+        </button>
+        <div style={{ fontSize: 13, letterSpacing: 1.5, color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 10, zIndex: 2 }}>
           Diario financiero
         </div>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 24px 0', color: '#F5F5F7' }}>Inicia sesión para continuar</h1>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 24px 0', color: 'var(--text-heading)', zIndex: 2 }}>Inicia sesión para continuar</h1>
         <button
           onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
-          style={{ padding: '12px 24px', background: '#6E56CF', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
+          style={{ padding: '12px 24px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer', zIndex: 2 }}
         >
           Iniciar sesión con Google
         </button>
@@ -321,22 +471,23 @@ export default function App() {
 
   if (loading && accounts.length === 0 && days.length === 0) {
     return (
-      <div style={{ minHeight: '100vh', background: '#0F1115', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
-        <div style={{ color: '#8A9099' }}>Cargando tus datos…</div>
+      <div style={{ minHeight: '100vh', background: 'var(--bg-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
+        <div style={{ color: 'var(--text-secondary)' }}>Cargando tus datos…</div>
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0F1115', color: '#E8E9EB', fontFamily: "'Inter', system-ui, sans-serif", paddingBottom: 100 }}>
+    <div style={{ minHeight: '100vh', background: 'transparent', color: 'var(--text-primary)', fontFamily: "'Inter', system-ui, sans-serif", paddingBottom: 100, position: 'relative', overflow: 'hidden' }}>
+      <div className="neon-gradient" />
       <style>{`
         * { box-sizing: border-box; }
         input, select, textarea, button { font-family: inherit; }
-        ::placeholder { color: #5A6068; }
-        .card { background: #171A20; border: 1px solid #232730; border-radius: 14px; }
+        ::placeholder { color: var(--text-muted); }
+        .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 14px; }
         button { cursor: pointer; }
         .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
-        .field { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #232730; background: #0F1115; color: #E8E9EB; font-size: 14px; margin-bottom: 10px; }
+        .field { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--card-border); background: var(--bg-color); color: var(--text-primary); font-size: 14px; margin-bottom: 10px; }
         @media (max-width: 640px) {
           .grid-accounts { grid-template-columns: repeat(2, 1fr) !important; }
         }
@@ -345,22 +496,29 @@ export default function App() {
       <div style={{ maxWidth: 760, margin: '0 auto', padding: '28px 16px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, gap: 12 }}>
           <div>
-            <div style={{ fontSize: 13, letterSpacing: 1.5, color: '#6E56CF', fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>
+            <div style={{ fontSize: 13, letterSpacing: 1.5, color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>
               Diario financiero
             </div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: '#F5F5F7' }}>Un registro por día</h1>
-            <div style={{ fontSize: 11.5, color: '#5A6068', marginTop: 4 }}>{sesion.user.email}</div>
+            <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: 'var(--text-heading)' }}>Un registro por día</h1>
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 4 }}>{sesion.user.email}</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--card-border-strong)', borderRadius: 10, padding: '8px 10px', display: 'flex', alignItems: 'center', color: 'var(--text-secondary)' }}
+            >
+              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <button
               onClick={exportBackup}
-              style={{ background: '#1D2128', border: '1px solid #2A2F38', borderRadius: 10, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 6, color: '#9499A3', fontSize: 12.5, whiteSpace: 'nowrap' }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--card-border-strong)', borderRadius: 10, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 12.5, whiteSpace: 'nowrap' }}
             >
               <Download size={14} /> Respaldo
             </button>
             <button
               onClick={() => supabase.auth.signOut()}
-              style={{ background: '#1D2128', border: '1px solid #2A2F38', borderRadius: 10, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 6, color: '#9499A3', fontSize: 12.5, whiteSpace: 'nowrap' }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--card-border-strong)', borderRadius: 10, padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: 12.5, whiteSpace: 'nowrap' }}
             >
               <LogOut size={14} />
             </button>
@@ -377,7 +535,7 @@ export default function App() {
         {/* Resumen */}
         {accounts.length > 0 && (
           <div className="card" style={{ padding: 24, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: '#9499A3', marginBottom: 4 }}>Saldo líquido total (sin contar crédito)</div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 }}>Saldo líquido total (sin contar crédito)</div>
             <div className="mono" style={{ fontSize: 38, fontWeight: 700, color: liquidTotal >= 0 ? '#7FD17F' : '#E36A6A', letterSpacing: -1 }}>
               {formatMXN(liquidTotal)}
             </div>
@@ -391,10 +549,10 @@ export default function App() {
 
         {/* Cuentas */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#D5D7DB' }}>Tus cuentas</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-label)' }}>Tus cuentas</span>
           <button
             onClick={openNewAccount}
-            style={{ background: 'none', border: 'none', color: '#6E56CF', fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, padding: 4 }}
+            style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, padding: 4 }}
           >
             <Plus size={14} /> Agregar cuenta
           </button>
@@ -402,12 +560,12 @@ export default function App() {
 
         {accounts.length === 0 ? (
           <div className="card" style={{ padding: 24, marginBottom: 20, textAlign: 'center' }}>
-            <div style={{ color: '#9499A3', fontSize: 13.5, marginBottom: 12 }}>
-              Aún no tienes cuentas. Crea las que uses: "Efectivo", "Débito", "Crédito", etc.
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13.5, marginBottom: 12 }}>
+              Aún no tienes cuentas. Crea las que uses: "Efectivo 1", "Débito BBVA", "Crédito Revolut", etc.
             </div>
             <button
               onClick={openNewAccount}
-              style={{ padding: '10px 16px', borderRadius: 10, border: 'none', background: '#6E56CF', color: '#fff', fontWeight: 700, fontSize: 13.5 }}
+              style={{ padding: '10px 16px', borderRadius: 10, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13.5 }}
             >
               Crear mi primera cuenta
             </button>
@@ -423,20 +581,20 @@ export default function App() {
                 <div key={acc.id} className="card" style={{ padding: 14, position: 'relative' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                     <Icon size={14} color={meta.color} />
-                    <span style={{ fontSize: 11.5, color: '#9499A3', lineHeight: 1.2 }}>{acc.name}</span>
+                    <span style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.2 }}>{acc.name}</span>
                   </div>
-                  <div className="mono" style={{ fontSize: 17, fontWeight: 700, color: isCredit && bal > 0 ? '#E3A66A' : '#F5F5F7' }}>
+                  <div className="mono" style={{ fontSize: 17, fontWeight: 700, color: isCredit && bal > 0 ? '#E3A66A' : 'var(--text-heading)' }}>
                     {formatMXN(bal)}
                   </div>
-                  <div style={{ fontSize: 10, color: '#6E747D', marginTop: 2 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted-2)', marginTop: 2 }}>
                     {meta.label}{isCredit ? (bal > 0 ? ' · a deber' : ' · al corriente') : ''}
                   </div>
                   <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', gap: 4 }}>
                     <button onClick={() => openEditAccount(acc)} style={{ background: 'none', border: 'none', padding: 2 }}>
-                      <Pencil size={12} color="#5A6068" />
+                      <Pencil size={12} color="var(--text-muted)" />
                     </button>
                     <button onClick={() => removeAccount(acc.id)} style={{ background: 'none', border: 'none', padding: 2 }}>
-                      <Trash2 size={12} color="#5A6068" />
+                      <Trash2 size={12} color="var(--text-muted)" />
                     </button>
                   </div>
                 </div>
@@ -445,13 +603,47 @@ export default function App() {
           </div>
         )}
 
+        {/* Estado de cuenta en PDF */}
+        {accounts.length > 0 && (
+          <div className="card" style={{ padding: 18, marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+              <FileText size={14} color="var(--accent)" />
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-label)' }}>Generar estado de cuenta</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input
+                type="date"
+                value={pdfRange.start}
+                onChange={e => setPdfRange(r => ({ ...r, start: e.target.value }))}
+                className="field"
+                style={{ marginBottom: 0, flex: '1 1 140px' }}
+              />
+              <span style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>a</span>
+              <input
+                type="date"
+                value={pdfRange.end}
+                onChange={e => setPdfRange(r => ({ ...r, end: e.target.value }))}
+                className="field"
+                style={{ marginBottom: 0, flex: '1 1 140px' }}
+              />
+              <button
+                onClick={generateStatementPDF}
+                style={{ padding: '11px 16px', borderRadius: 10, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
+              >
+                <Download size={14} /> Descargar PDF
+              </button>
+            </div>
+            {pdfError && <div style={{ color: '#E36A6A', fontSize: 12.5, marginTop: 8 }}>{pdfError}</div>}
+          </div>
+        )}
+
         {/* Línea de días */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#D5D7DB' }}>Registro diario</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-label)' }}>Registro diario</span>
         </div>
 
         {sortedDays.length === 0 && (
-          <div className="card" style={{ padding: 24, textAlign: 'center', color: '#5A6068', fontSize: 13.5 }}>
+          <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13.5 }}>
             Aún no hay días registrados. Cada día puedes anotar tus ingresos y gastos, o marcarlo como "sin cambios".
           </div>
         )}
@@ -467,12 +659,12 @@ export default function App() {
                 onClick={() => setExpandedDay(isOpen ? null : day.id)}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Calendar size={14} color="#6E56CF" />
-                  <span style={{ fontSize: 13.5, fontWeight: 600, textTransform: 'capitalize', color: '#E8E9EB' }}>
+                  <Calendar size={14} color="var(--accent)" />
+                  <span style={{ fontSize: 13.5, fontWeight: 600, textTransform: 'capitalize', color: 'var(--text-primary)' }}>
                     {formatDateLabel(day.fecha)}
                   </span>
                   {day.sinCambios && (
-                    <span style={{ fontSize: 10.5, background: 'rgba(148,153,163,0.15)', color: '#9499A3', padding: '2px 8px', borderRadius: 20, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 10.5, background: 'rgba(148,153,163,0.15)', color: 'var(--text-secondary)', padding: '2px 8px', borderRadius: 20, display: 'flex', alignItems: 'center', gap: 4 }}>
                       <Moon size={10} /> sin cambios
                     </span>
                   )}
@@ -484,19 +676,19 @@ export default function App() {
                       {totalGastos > 0 && <span style={{ color: '#E36A6A' }}>-{formatMXN(totalGastos)}</span>}
                     </div>
                   )}
-                  {isOpen ? <ChevronUp size={16} color="#6E747D" /> : <ChevronDown size={16} color="#6E747D" />}
+                  {isOpen ? <ChevronUp size={16} color="var(--text-muted-2)" /> : <ChevronDown size={16} color="var(--text-muted-2)" />}
                 </div>
               </div>
 
               {isOpen && (
-                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #232730' }}>
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--card-border)' }}>
                   {!day.sinCambios && (day.movimientos || []).map(m => {
                     const acc = accounts.find(a => a.id === m.cuentaId);
                     return (
-                      <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #1D2128' }}>
+                      <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--surface-2)' }}>
                         <div>
-                          <div style={{ fontSize: 13, color: '#E8E9EB' }}>{m.descripcion || (m.tipo === 'gasto' ? 'Gasto' : 'Ingreso')}</div>
-                          <div style={{ fontSize: 11, color: '#6E747D' }}>{acc ? acc.name : 'Cuenta eliminada'}</div>
+                          <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{m.descripcion || (m.tipo === 'gasto' ? 'Gasto' : 'Ingreso')}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted-2)' }}>{acc ? acc.name : 'Cuenta eliminada'}</div>
                         </div>
                         <span className="mono" style={{ fontSize: 13.5, fontWeight: 600, color: m.tipo === 'gasto' ? '#E36A6A' : '#7FD17F' }}>
                           {m.tipo === 'gasto' ? '-' : '+'}{formatMXN(m.monto)}
@@ -506,16 +698,16 @@ export default function App() {
                   })}
 
                   {day.nota && (
-                    <div style={{ marginTop: 12, display: 'flex', gap: 8, background: '#0F1115', border: '1px solid #232730', borderRadius: 10, padding: 12 }}>
+                    <div style={{ marginTop: 12, display: 'flex', gap: 8, background: 'var(--bg-color)', border: '1px solid var(--card-border)', borderRadius: 10, padding: 12 }}>
                       <StickyNote size={14} color="#9D7FE8" style={{ flexShrink: 0, marginTop: 1 }} />
-                      <div style={{ fontSize: 12.5, color: '#B8BCC4', lineHeight: 1.5, fontStyle: 'italic' }}>{day.nota}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5, fontStyle: 'italic' }}>{day.nota}</div>
                     </div>
                   )}
 
                   <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
                     <button
                       onClick={() => openEditDay(day)}
-                      style={{ flex: 1, padding: 8, borderRadius: 8, border: '1px solid #2A2F38', background: '#1D2128', color: '#D5D7DB', fontSize: 12.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
+                      style={{ flex: 1, padding: 8, borderRadius: 8, border: '1px solid var(--card-border-strong)', background: 'var(--surface-2)', color: 'var(--text-label)', fontSize: 12.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
                     >
                       <Pencil size={12} /> Editar
                     </button>
@@ -540,12 +732,12 @@ export default function App() {
         title={accounts.length === 0 ? 'Primero agrega una cuenta' : 'Registrar el día'}
         style={{
           position: 'fixed', bottom: 24, right: 24, width: 56, height: 56, borderRadius: '50%',
-          background: accounts.length === 0 ? '#2A2F38' : '#6E56CF', border: 'none',
+          background: accounts.length === 0 ? 'var(--card-border-strong)' : 'var(--accent)', border: 'none',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           boxShadow: accounts.length === 0 ? 'none' : '0 4px 20px rgba(110,86,207,0.5)', zIndex: 10,
         }}
       >
-        <Plus size={26} color={accounts.length === 0 ? '#5A6068' : '#fff'} />
+        <Plus size={26} color={accounts.length === 0 ? 'var(--text-muted)' : '#fff'} />
       </button>
 
       {/* Modal: cuenta */}
@@ -555,7 +747,7 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <span style={{ fontSize: 16, fontWeight: 700 }}>{editingAccount ? 'Editar cuenta' : 'Nueva cuenta'}</span>
               <button type="button" onClick={() => setShowAccountModal(false)} style={{ background: 'none', border: 'none' }}>
-                <X size={20} color="#9499A3" />
+                <X size={20} color="var(--text-secondary)" />
               </button>
             </div>
 
@@ -577,12 +769,12 @@ export default function App() {
                     onClick={() => setAccountForm(f => ({ ...f, type: t.id }))}
                     style={{
                       padding: '10px 6px', borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                      border: active ? `1.5px solid ${t.color}` : '1px solid #232730',
+                      border: active ? `1.5px solid ${t.color}` : '1px solid var(--card-border)',
                       background: active ? `${t.color}1F` : 'transparent',
                     }}
                   >
-                    <Icon size={16} color={active ? t.color : '#9499A3'} />
-                    <span style={{ fontSize: 10.5, color: active ? t.color : '#9499A3', textAlign: 'center' }}>{t.label}</span>
+                    <Icon size={16} color={active ? t.color : 'var(--text-secondary)'} />
+                    <span style={{ fontSize: 10.5, color: active ? t.color : 'var(--text-secondary)', textAlign: 'center' }}>{t.label}</span>
                   </button>
                 );
               })}
@@ -601,7 +793,7 @@ export default function App() {
 
             {accountError && <div style={{ color: '#E36A6A', fontSize: 12.5, marginBottom: 10 }}>{accountError}</div>}
 
-            <button type="submit" disabled={savingAccount} style={{ width: '100%', padding: 13, borderRadius: 10, border: 'none', background: '#6E56CF', color: '#fff', fontWeight: 700, fontSize: 14.5, opacity: savingAccount ? 0.7 : 1 }}>
+            <button type="submit" disabled={savingAccount} style={{ width: '100%', padding: 13, borderRadius: 10, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 14.5, opacity: savingAccount ? 0.7 : 1 }}>
               {savingAccount ? 'Guardando…' : 'Guardar cuenta'}
             </button>
           </form>
@@ -615,7 +807,7 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <span style={{ fontSize: 16, fontWeight: 700 }}>{editingDayId ? 'Editar registro' : 'Registrar el día'}</span>
               <button type="button" onClick={() => setShowDayModal(false)} style={{ background: 'none', border: 'none' }}>
-                <X size={20} color="#9499A3" />
+                <X size={20} color="var(--text-secondary)" />
               </button>
             </div>
 
@@ -630,14 +822,14 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setDayForm(f => ({ ...f, sinCambios: false }))}
-                style={{ flex: 1, padding: 10, borderRadius: 10, border: !dayForm.sinCambios ? '1.5px solid #6E56CF' : '1px solid #232730', background: !dayForm.sinCambios ? 'rgba(110,86,207,0.12)' : 'transparent', color: !dayForm.sinCambios ? '#6E56CF' : '#9499A3', fontWeight: 600, fontSize: 13 }}
+                style={{ flex: 1, padding: 10, borderRadius: 10, border: !dayForm.sinCambios ? '1.5px solid var(--accent)' : '1px solid var(--card-border)', background: !dayForm.sinCambios ? 'rgba(110,86,207,0.12)' : 'transparent', color: !dayForm.sinCambios ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: 600, fontSize: 13 }}
               >
                 Hubo movimientos
               </button>
               <button
                 type="button"
                 onClick={() => setDayForm(f => ({ ...f, sinCambios: true }))}
-                style={{ flex: 1, padding: 10, borderRadius: 10, border: dayForm.sinCambios ? '1.5px solid #9499A3' : '1px solid #232730', background: dayForm.sinCambios ? 'rgba(148,153,163,0.12)' : 'transparent', color: dayForm.sinCambios ? '#D5D7DB' : '#9499A3', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
+                style={{ flex: 1, padding: 10, borderRadius: 10, border: dayForm.sinCambios ? '1.5px solid var(--text-secondary)' : '1px solid var(--card-border)', background: dayForm.sinCambios ? 'rgba(148,153,163,0.12)' : 'transparent', color: dayForm.sinCambios ? 'var(--text-label)' : 'var(--text-secondary)', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
               >
                 <Moon size={13} /> Sin cambios
               </button>
@@ -646,19 +838,19 @@ export default function App() {
             {!dayForm.sinCambios && (
               <div style={{ marginBottom: 14 }}>
                 {dayForm.movimientos.map((m, idx) => (
-                  <div key={m.id} className="card" style={{ padding: 12, marginBottom: 10, background: '#0F1115' }}>
+                  <div key={m.id} className="card" style={{ padding: 12, marginBottom: 10, background: 'var(--bg-color)' }}>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                       <button type="button" onClick={() => updateMovLine(m.id, { tipo: 'gasto' })}
-                        style={{ flex: 1, padding: 7, borderRadius: 8, border: m.tipo === 'gasto' ? '1.5px solid #E36A6A' : '1px solid #232730', background: m.tipo === 'gasto' ? 'rgba(227,106,106,0.12)' : 'transparent', color: m.tipo === 'gasto' ? '#E36A6A' : '#9499A3', fontWeight: 600, fontSize: 12 }}>
+                        style={{ flex: 1, padding: 7, borderRadius: 8, border: m.tipo === 'gasto' ? '1.5px solid #E36A6A' : '1px solid var(--card-border)', background: m.tipo === 'gasto' ? 'rgba(227,106,106,0.12)' : 'transparent', color: m.tipo === 'gasto' ? '#E36A6A' : 'var(--text-secondary)', fontWeight: 600, fontSize: 12 }}>
                         Gasto
                       </button>
                       <button type="button" onClick={() => updateMovLine(m.id, { tipo: 'ingreso' })}
-                        style={{ flex: 1, padding: 7, borderRadius: 8, border: m.tipo === 'ingreso' ? '1.5px solid #7FD17F' : '1px solid #232730', background: m.tipo === 'ingreso' ? 'rgba(127,209,127,0.12)' : 'transparent', color: m.tipo === 'ingreso' ? '#7FD17F' : '#9499A3', fontWeight: 600, fontSize: 12 }}>
+                        style={{ flex: 1, padding: 7, borderRadius: 8, border: m.tipo === 'ingreso' ? '1.5px solid #7FD17F' : '1px solid var(--card-border)', background: m.tipo === 'ingreso' ? 'rgba(127,209,127,0.12)' : 'transparent', color: m.tipo === 'ingreso' ? '#7FD17F' : 'var(--text-secondary)', fontWeight: 600, fontSize: 12 }}>
                         Ingreso
                       </button>
                       {dayForm.movimientos.length > 1 && (
                         <button type="button" onClick={() => removeMovLine(m.id)} style={{ padding: '0 8px', background: 'none', border: 'none' }}>
-                          <Trash2 size={14} color="#5A6068" />
+                          <Trash2 size={14} color="var(--text-muted)" />
                         </button>
                       )}
                     </div>
@@ -694,14 +886,14 @@ export default function App() {
                 <button
                   type="button"
                   onClick={addMovLine}
-                  style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px dashed #2A2F38', background: 'transparent', color: '#6E56CF', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                  style={{ width: '100%', padding: 10, borderRadius: 10, border: '1px dashed var(--card-border-strong)', background: 'transparent', color: 'var(--accent)', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
                 >
                   <Plus size={14} /> Agregar otro movimiento
                 </button>
               </div>
             )}
 
-            <div style={{ marginBottom: 6, fontSize: 12.5, color: '#9499A3', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ marginBottom: 6, fontSize: 12.5, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 5 }}>
               <StickyNote size={13} /> ¿Por qué estas transacciones? (opcional)
             </div>
             <textarea
@@ -714,7 +906,7 @@ export default function App() {
 
             {dayError && <div style={{ color: '#E36A6A', fontSize: 12.5, marginBottom: 10 }}>{dayError}</div>}
 
-            <button type="submit" disabled={savingDay} style={{ width: '100%', padding: 13, borderRadius: 10, border: 'none', background: '#6E56CF', color: '#fff', fontWeight: 700, fontSize: 14.5, opacity: savingDay ? 0.7 : 1 }}>
+            <button type="submit" disabled={savingDay} style={{ width: '100%', padding: 13, borderRadius: 10, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 14.5, opacity: savingDay ? 0.7 : 1 }}>
               {savingDay ? 'Guardando…' : 'Guardar registro'}
             </button>
           </form>
