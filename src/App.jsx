@@ -51,7 +51,7 @@ export default function App() {
 
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
-  const [accountForm, setAccountForm] = useState({ name: '', type: 'efectivo', initialBalance: '' });
+  const [accountForm, setAccountForm] = useState({ name: '', type: 'efectivo', initialBalance: '', diaCorte: '', diaPago: '' });
   const [accountError, setAccountError] = useState('');
   const [savingAccount, setSavingAccount] = useState(false);
 
@@ -170,6 +170,8 @@ export default function App() {
       name: c.nombre,
       type: c.tipo,
       initialBalance: Number(c.saldo_inicial) || 0,
+      diaCorte: c.dia_corte || null,
+      diaPago: c.dia_pago || null,
     })));
 
     setDays((diasRes.data || []).map(d => ({
@@ -198,21 +200,50 @@ export default function App() {
     return map;
   }, [accounts, days]);
 
-  const liquidTotal = accounts.filter(a => a.type !== 'credito').reduce((s, a) => s + (balances[a.id] || 0), 0);
+  const liquidRaw = accounts.filter(a => a.type !== 'credito' && a.type !== 'ahorro').reduce((s, a) => s + (balances[a.id] || 0), 0);
   const creditDebt = accounts.filter(a => a.type === 'credito').reduce((s, a) => s + (balances[a.id] || 0), 0);
+  const savingsTotal = accounts.filter(a => a.type === 'ahorro').reduce((s, a) => s + (balances[a.id] || 0), 0);
+  const freeToSpend = liquidRaw - creditDebt;
   const sortedDays = [...days].sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+
+  function nextDateForDay(day) {
+    if (!day) return null;
+    const now = new Date();
+    const clampDay = (y, m, d) => {
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      return new Date(y, m, Math.min(d, lastDay));
+    };
+    let candidate = clampDay(now.getFullYear(), now.getMonth(), day);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (candidate < today) {
+      const nextMonth = now.getMonth() + 1;
+      candidate = clampDay(now.getFullYear() + (nextMonth > 11 ? 1 : 0), nextMonth % 12, day);
+    }
+    return candidate;
+  }
+
+  function formatShortDate(date) {
+    if (!date) return '';
+    return date.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
+  }
 
   // ---------- Cuentas ----------
   function openNewAccount() {
     setEditingAccount(null);
-    setAccountForm({ name: '', type: 'efectivo', initialBalance: '' });
+    setAccountForm({ name: '', type: 'efectivo', initialBalance: '', diaCorte: '', diaPago: '' });
     setAccountError('');
     setShowAccountModal(true);
   }
 
   function openEditAccount(acc) {
     setEditingAccount(acc.id);
-    setAccountForm({ name: acc.name, type: acc.type, initialBalance: String(acc.initialBalance) });
+    setAccountForm({
+      name: acc.name,
+      type: acc.type,
+      initialBalance: String(acc.initialBalance),
+      diaCorte: acc.diaCorte ? String(acc.diaCorte) : '',
+      diaPago: acc.diaPago ? String(acc.diaPago) : '',
+    });
     setAccountError('');
     setShowAccountModal(true);
   }
@@ -223,19 +254,32 @@ export default function App() {
     const initial = accountForm.initialBalance === '' ? 0 : parseFloat(accountForm.initialBalance);
     if (isNaN(initial)) { setAccountError('El saldo inicial debe ser un número'); return; }
 
+    let diaCorte = null;
+    let diaPago = null;
+    if (accountForm.type === 'credito') {
+      if (accountForm.diaCorte) {
+        diaCorte = parseInt(accountForm.diaCorte, 10);
+        if (isNaN(diaCorte) || diaCorte < 1 || diaCorte > 31) { setAccountError('El día de corte debe ser entre 1 y 31'); return; }
+      }
+      if (accountForm.diaPago) {
+        diaPago = parseInt(accountForm.diaPago, 10);
+        if (isNaN(diaPago) || diaPago < 1 || diaPago > 31) { setAccountError('El día límite de pago debe ser entre 1 y 31'); return; }
+      }
+    }
+
     setSavingAccount(true);
     setAccountError('');
 
     if (editingAccount) {
       const { error } = await supabase
         .from('cuentas')
-        .update({ nombre: accountForm.name.trim(), tipo: accountForm.type, saldo_inicial: initial })
+        .update({ nombre: accountForm.name.trim(), tipo: accountForm.type, saldo_inicial: initial, dia_corte: diaCorte, dia_pago: diaPago })
         .eq('id', editingAccount);
       if (error) { setAccountError('No se pudo guardar. Intenta de nuevo.'); setSavingAccount(false); return; }
     } else {
       const { error } = await supabase
         .from('cuentas')
-        .insert([{ user_id: sesion.user.id, nombre: accountForm.name.trim(), tipo: accountForm.type, saldo_inicial: initial }]);
+        .insert([{ user_id: sesion.user.id, nombre: accountForm.name.trim(), tipo: accountForm.type, saldo_inicial: initial, dia_corte: diaCorte, dia_pago: diaPago }]);
       if (error) { setAccountError('No se pudo crear la cuenta.'); setSavingAccount(false); return; }
     }
 
@@ -535,15 +579,30 @@ export default function App() {
         {/* Resumen */}
         {accounts.length > 0 && (
           <div className="card" style={{ padding: 24, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 }}>Saldo líquido total (sin contar crédito)</div>
-            <div className="mono" style={{ fontSize: 38, fontWeight: 700, color: liquidTotal >= 0 ? '#7FD17F' : '#E36A6A', letterSpacing: -1 }}>
-              {formatMXN(liquidTotal)}
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 4 }}>
+              Libre para gastar (descontando deuda de crédito, sin contar ahorro)
             </div>
-            {creditDebt !== 0 && (
-              <div style={{ marginTop: 10, fontSize: 13, color: '#E3A66A' }}>
-                Deuda de crédito pendiente: <b className="mono">{formatMXN(creditDebt)}</b>
+            <div className="mono" style={{ fontSize: 38, fontWeight: 700, color: freeToSpend >= 0 ? '#7FD17F' : '#E36A6A', letterSpacing: -1 }}>
+              {formatMXN(freeToSpend)}
+            </div>
+            <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--card-border)' }}>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted-2)' }}>Líquido total</div>
+                <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{formatMXN(liquidRaw)}</div>
               </div>
-            )}
+              {savingsTotal !== 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted-2)' }}>Ahorro</div>
+                  <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: '#9D7FE8' }}>{formatMXN(savingsTotal)}</div>
+                </div>
+              )}
+              {creditDebt !== 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted-2)' }}>Deuda de crédito</div>
+                  <div className="mono" style={{ fontSize: 15, fontWeight: 600, color: '#E3A66A' }}>{formatMXN(creditDebt)}</div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -589,6 +648,12 @@ export default function App() {
                   <div style={{ fontSize: 10, color: 'var(--text-muted-2)', marginTop: 2 }}>
                     {meta.label}{isCredit ? (bal > 0 ? ' · a deber' : ' · al corriente') : ''}
                   </div>
+                  {isCredit && (acc.diaCorte || acc.diaPago) && (
+                    <div style={{ fontSize: 9.5, color: 'var(--text-muted-2)', marginTop: 4, lineHeight: 1.5 }}>
+                      {acc.diaCorte && <div>Corte: {formatShortDate(nextDateForDay(acc.diaCorte))}</div>}
+                      {acc.diaPago && <div>Pago límite: {formatShortDate(nextDateForDay(acc.diaPago))}</div>}
+                    </div>
+                  )}
                   <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', gap: 4 }}>
                     <button onClick={() => openEditAccount(acc)} style={{ background: 'none', border: 'none', padding: 2 }}>
                       <Pencil size={12} color="var(--text-muted)" />
@@ -788,8 +853,39 @@ export default function App() {
               value={accountForm.initialBalance}
               onChange={e => setAccountForm(f => ({ ...f, initialBalance: e.target.value }))}
               className="field"
-              style={{ marginBottom: 14 }}
+              style={{ marginBottom: accountForm.type === 'credito' ? 10 : 14 }}
             />
+
+            {accountForm.type === 'credito' && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Día de corte (1-31)</div>
+                  <input
+                    placeholder="Ej. 5"
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={accountForm.diaCorte}
+                    onChange={e => setAccountForm(f => ({ ...f, diaCorte: e.target.value }))}
+                    className="field"
+                    style={{ marginBottom: 0 }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>Día límite de pago (1-31)</div>
+                  <input
+                    placeholder="Ej. 20"
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={accountForm.diaPago}
+                    onChange={e => setAccountForm(f => ({ ...f, diaPago: e.target.value }))}
+                    className="field"
+                    style={{ marginBottom: 0 }}
+                  />
+                </div>
+              </div>
+            )}
 
             {accountError && <div style={{ color: '#E36A6A', fontSize: 12.5, marginBottom: 10 }}>{accountError}</div>}
 
