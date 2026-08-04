@@ -7,6 +7,33 @@ import {
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient';
+import MoltenMetal from './components/MoltenMetal';
+
+function MoltenMetalBackground() {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: -1, pointerEvents: 'none' }}>
+      <MoltenMetal
+        color1="#5227FF"
+        color2="#FF9FFC"
+        color3="#FFFFFF"
+        speed={0.35}
+        scale={4}
+        detail={3}
+        glow={1.6}
+        coreSize={0.1}
+        swirl={1}
+        fold={-0.2}
+        blackPoint={0.05}
+        brightness={1.3}
+        colorMode="molten"
+        grain
+        grainIntensity={0.05}
+        mouseInteraction={false}
+        opacity={1}
+      />
+    </div>
+  );
+}
 
 const ACCOUNT_TYPES = [
   { id: 'efectivo', label: 'Efectivo', icon: Banknote, color: '#7FD17F' },
@@ -492,7 +519,7 @@ export default function App() {
   if (!sesion) {
     return (
       <div style={{ minHeight: '100vh', background: 'transparent', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
-        <div className="neon-gradient" />
+        {theme === 'dark' && <MoltenMetalBackground />}
         <button
           onClick={toggleTheme}
           style={{ position: 'absolute', top: 20, right: 20, width: 40, height: 40, borderRadius: 20, border: '1px solid var(--card-border)', background: 'var(--card-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 }}
@@ -523,7 +550,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'transparent', color: 'var(--text-primary)', fontFamily: "'Inter', system-ui, sans-serif", paddingBottom: 100, position: 'relative', overflow: 'hidden' }}>
-      <div className="neon-gradient" />
+      {theme === 'dark' && <MoltenMetalBackground />}
       <style>{`
         * { box-sizing: border-box; }
         input, select, textarea, button { font-family: inherit; }
