@@ -10,14 +10,18 @@ import { supabase } from './supabaseClient';
 import MoltenMetal from './components/MoltenMetal';
 
 function AppBackground({ theme }) {
-  const colorFondo = theme === 'dark' ? '#0E0914' : '#FCFAFF';
+
+  const isDark = theme === 'dark';
+  const color1 = isDark ? '#0a0514' : '#5227FF';
+  const color2 = isDark ? '#2b1055' : '#FF9FFC';
+  const color3 = isDark ? '#ffffff' : '#FFFFFF';
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', zIndex: -1 }}>
       <MoltenMetal
-        color1="#5227FF"
-        color2="#FF9FFC"
-        color3={colorFondo}
+        color1={color1}
+        color2={color2}
+        color3={color3}
         speed={0.35}
         scale={4}
         detail={3}
@@ -28,9 +32,9 @@ function AppBackground({ theme }) {
         blackPoint={0.05}
         brightness={1.3}
         colorMode="molten"
-        grain
+        grain={true}
         grainIntensity={0.05}
-        mouseInteraction
+        mouseInteraction={true}
         mouseStrength={0.3}
         opacity={1}
       />
