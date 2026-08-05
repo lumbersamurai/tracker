@@ -46,6 +46,16 @@ body {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+[data-theme='dark'] body {
+  background-color: transparent !important;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
 /* === FONDO DEGRADADO TIPO REVOLUT === */
 .neon-gradient {
   position: absolute;

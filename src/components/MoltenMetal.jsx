@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Renderer, Program, Mesh, Triangle } from 'ogl';
 import './MoltenMetal.css';
 
@@ -129,15 +130,25 @@ export default function MoltenMetal({
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new Renderer({
-      webgl: 2,
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: false,
-      dpr: Math.min(window.devicePixelRatio || 1, 2),
-    });
+    let renderer;
+    try {
+      renderer = new Renderer({
+        webgl: 2,
+        alpha: true,
+        premultipliedAlpha: true,
+        antialias: false,
+        dpr: Math.min(window.devicePixelRatio || 1, 2),
+      });
+    } catch (err) {
+      console.error('MoltenMetal: no se pudo crear el contexto WebGL', err);
+      return;
+    }
 
     const gl = renderer.gl;
+    if (!gl) {
+      console.error('MoltenMetal: WebGL no disponible');
+      return;
+    }
     gl.clearColor(0, 0, 0, 0);
     const canvas = gl.canvas;
     canvas.style.width = '100%';
@@ -262,7 +273,6 @@ export default function MoltenMetal({
       } catch {
         // canvas may already be detached
       }
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
     };
   }, []);
 
@@ -325,4 +335,34 @@ export default function MoltenMetal({
   ]);
 
   return <div ref={containerRef} className={`molten-metal-container ${className}`.trim()} />;
+}
+
+const MOLTEN_METAL_PROPS = {
+  color1: '#5227FF',
+  color2: '#FF9FFC',
+  color3: '#FFFFFF',
+  speed: 0.35,
+  scale: 4,
+  detail: 3,
+  glow: 1.6,
+  coreSize: 0.1,
+  swirl: 1,
+  fold: -0.2,
+  blackPoint: 0.05,
+  brightness: 1.3,
+  colorMode: 'molten',
+  grain: true,
+  grainIntensity: 0.05,
+  mouseInteraction: false,
+  opacity: 1,
+};
+
+export function MoltenMetalBackground() {
+  return createPortal(
+    <div className="molten-metal-bg" aria-hidden="true">
+      <div className="molten-metal-bg__fallback" />
+      <MoltenMetal {...MOLTEN_METAL_PROPS} />
+    </div>,
+    document.body,
+  );
 }
