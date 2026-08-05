@@ -13,7 +13,19 @@ function AppBackground({ theme }) {
   const isDark = theme === 'dark';
 
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', zIndex: -1 }}>
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        zIndex: -1,
+        // Respaldo: si WebGL no logra renderizar el canvas, esto se ve en
+        // vez de blanco puro.
+        backgroundColor: isDark ? '#0B0914' : '#F2F2F7',
+      }}
+    >
       <MoltenMetal
         color1={isDark ? '#0a0514' : '#5227FF'}
         color2={isDark ? '#2b1055' : '#FF9FFC'}

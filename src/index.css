@@ -1,6 +1,4 @@
 /* === VARIABLES DE TEMA === */
-
-/* Modo claro (por defecto) */
 :root {
   --bg-color: #F2F2F7;
   --card-bg: #FFFFFF;
@@ -17,7 +15,6 @@
   --neon-opacity: 0;
 }
 
-/* Modo oscuro, inspirado en Revolut */
 [data-theme='dark'] {
   --bg-color: #0B0914;
   --card-bg: #17151F;
@@ -46,17 +43,12 @@ body {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-[data-theme='dark'] body {
-  background-color: transparent !important;
-}
-
 #root {
   position: relative;
   z-index: 1;
   min-height: 100vh;
 }
 
-/* === FONDO DEGRADADO TIPO REVOLUT === */
 .neon-gradient {
   position: absolute;
   top: -120px;
