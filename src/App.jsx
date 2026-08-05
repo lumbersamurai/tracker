@@ -10,13 +10,14 @@ import { supabase } from './supabaseClient';
 import MoltenMetal from './components/MoltenMetal';
 
 function AppBackground({ theme }) {
-  if (theme !== 'dark') return null;
+  const colorFondo = theme === 'dark' ? '#0E0914' : '#FCFAFF';
+
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', zIndex: -1 }}>
       <MoltenMetal
         color1="#5227FF"
         color2="#FF9FFC"
-        color3="#FFFFFF"
+        color3={colorFondo}
         speed={0.35}
         scale={4}
         detail={3}
