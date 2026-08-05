@@ -10,33 +10,29 @@ import { supabase } from './supabaseClient';
 import MoltenMetal from './components/MoltenMetal';
 
 function AppBackground({ theme }) {
-
   const isDark = theme === 'dark';
-  const color1 = isDark ? '#0a0514' : '#5227FF';
-  const color2 = isDark ? '#2b1055' : '#FF9FFC';
-  const color3 = isDark ? '#ffffff' : '#FFFFFF';
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', zIndex: -1 }}>
       <MoltenMetal
-        color1={color1}
-        color2={color2}
-        color3={color3}
-        speed={0.35}
-        scale={4}
+        color1={isDark ? '#0a0514' : '#5227FF'}
+        color2={isDark ? '#2b1055' : '#FF9FFC'}
+        color3={isDark ? '#9d7fe8' : '#FFFFFF'}
+        speed={isDark ? 0.2 : 0.35}
+        scale={isDark ? 5 : 4}
         detail={3}
-        glow={1.6}
-        coreSize={0.1}
+        glow={isDark ? 0.8 : 1.6}
+        coreSize={isDark ? 0.05 : 0.1}
         swirl={1}
         fold={-0.2}
-        blackPoint={0.05}
-        brightness={1.3}
+        blackPoint={isDark ? 0.3 : 0.05}
+        brightness={isDark ? 0.9 : 1.3}
         colorMode="molten"
         grain={true}
         grainIntensity={0.05}
         mouseInteraction={true}
         mouseStrength={0.3}
-        opacity={1}
+        opacity={isDark ? 0.85 : 1}
       />
     </div>
   );
@@ -88,7 +84,6 @@ export default function App() {
   const [savingAdjust, setSavingAdjust] = useState(false);
 
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [editingAccount, setEditingAccount] = useState(null);
   const [accountForm, setAccountForm] = useState({ name: '', type: 'efectivo', initialBalance: '', diaCorte: '', diaPago: '' });
   const [accountError, setAccountError] = useState('');
   const [savingAccount, setSavingAccount] = useState(false);
@@ -217,19 +212,6 @@ export default function App() {
     setShowAccountModal(true);
   }
 
-  function openEditAccount(acc) {
-    setEditingAccount(acc.id);
-    setAccountForm({
-      name: acc.name,
-      type: acc.type,
-      initialBalance: String(acc.initialBalance),
-      diaCorte: acc.diaCorte ? String(acc.diaCorte) : '',
-      diaPago: acc.diaPago ? String(acc.diaPago) : '',
-    });
-    setAccountError('');
-    setShowAccountModal(true);
-  }
-
   async function saveAccount(e) {
     e.preventDefault();
     if (!accountForm.name.trim()) { setAccountError('Ponle un nombre a la cuenta, ej. "Efectivo 1"'); return; }
@@ -252,18 +234,11 @@ export default function App() {
     setSavingAccount(true);
     setAccountError('');
 
-    if (editingAccount) {
-      const { error } = await supabase
-        .from('cuentas')
-        .update({ nombre: accountForm.name.trim(), tipo: accountForm.type, saldo_inicial: initial, dia_corte: diaCorte, dia_pago: diaPago })
-        .eq('id', editingAccount);
-      if (error) { setAccountError('No se pudo guardar. Intenta de nuevo.'); setSavingAccount(false); return; }
-    } else {
-      const { error } = await supabase
-        .from('cuentas')
-        .insert([{ user_id: sesion.user.id, nombre: accountForm.name.trim(), tipo: accountForm.type, saldo_inicial: initial, dia_corte: diaCorte, dia_pago: diaPago }]);
-      if (error) { setAccountError('No se pudo crear la cuenta.'); setSavingAccount(false); return; }
-    }
+    const { error } = await supabase
+      .from('cuentas')
+      .insert([{ user_id: sesion.user.id, nombre: accountForm.name.trim(), tipo: accountForm.type, saldo_inicial: initial, dia_corte: diaCorte, dia_pago: diaPago }]);
+
+    if (error) { setAccountError('No se pudo crear la cuenta.'); setSavingAccount(false); return; }
 
     setSavingAccount(false);
     setShowAccountModal(false);
@@ -723,14 +698,10 @@ export default function App() {
                       </div>
                     )}
                     <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', gap: 4 }}>
-                      {/* NUEVO BOTÓN DE AJUSTE */}
                       <button onClick={() => openAdjustAccount(acc)} title="Ajustar saldo real" style={{ background: 'var(--surface-2)', border: '1px solid var(--card-border-strong)', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginRight: 4 }}>
                         Ajustar
                       </button>
 
-                      <button onClick={() => openEditAccount(acc)} style={{ background: 'none', border: 'none', padding: 2 }} title="Editar propiedades">
-                        <Pencil size={12} color="var(--text-muted)" />
-                      </button>
                       <button onClick={() => removeAccount(acc.id)} style={{ background: 'none', border: 'none', padding: 2 }} title="Eliminar cuenta">
                         <Trash2 size={12} color="var(--text-muted)" />
                       </button>
@@ -883,7 +854,7 @@ export default function App() {
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 20 }} onClick={() => setShowAccountModal(false)}>
             <form onSubmit={saveAccount} onClick={e => e.stopPropagation()} className="card" style={{ width: '100%', maxWidth: 480, borderRadius: '20px 20px 0 0', padding: 22, paddingBottom: 28 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <span style={{ fontSize: 16, fontWeight: 700 }}>{editingAccount ? 'Editar cuenta' : 'Nueva cuenta'}</span>
+                <span style={{ fontSize: 16, fontWeight: 700 }}>Nueva cuenta</span>
                 <button type="button" onClick={() => setShowAccountModal(false)} style={{ background: 'none', border: 'none' }}>
                   <X size={20} color="var(--text-secondary)" />
                 </button>
