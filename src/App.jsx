@@ -7,15 +7,38 @@ import {
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient';
-import { MoltenMetalBackground } from './components/MoltenMetal';
+import MoltenMetal from './components/MoltenMetal';
 const [showAdjustModal, setShowAdjustModal] = useState(false);
 const [adjustForm, setAdjustForm] = useState({ accountId: '', currentBalance: 0, newBalance: '' });
 const [adjustError, setAdjustError] = useState('');
 const [savingAdjust, setSavingAdjust] = useState(false);
 function AppBackground({ theme }) {
-  return theme === 'dark' ? <MoltenMetalBackground /> : null;
+  if (theme !== 'dark') return null;
+  return (
+    <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', zIndex: -1 }}>
+      <MoltenMetal
+        color1="#5227FF"
+        color2="#FF9FFC"
+        color3="#FFFFFF"
+        speed={0.35}
+        scale={4}
+        detail={3}
+        glow={1.6}
+        coreSize={0.1}
+        swirl={1}
+        fold={-0.2}
+        blackPoint={0.05}
+        brightness={1.3}
+        colorMode="molten"
+        grain
+        grainIntensity={0.05}
+        mouseInteraction
+        mouseStrength={0.3}
+        opacity={1}
+      />
+    </div>
+  );
 }
-
 const ACCOUNT_TYPES = [
   { id: 'efectivo', label: 'Efectivo', icon: Banknote, color: '#7FD17F' },
   { id: 'debito', label: 'Cuenta de débito', icon: Wallet, color: '#6E9FD1' },
