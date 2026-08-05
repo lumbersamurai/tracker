@@ -273,6 +273,7 @@ export default function MoltenMetal({
       } catch {
         // canvas may already be detached
       }
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
     };
   }, []);
 

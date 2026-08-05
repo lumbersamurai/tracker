@@ -1,94 +1,22 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Plus, Trash2, Pencil, Wallet, CreditCard, PiggyBank, Banknote, Landmark,
+  Plus, Trash2, Pencil,
   X, Download, AlertTriangle, Calendar, StickyNote, ChevronDown, ChevronUp,
   Moon, LogOut, FileText, Sun,
 } from 'lucide-react';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient';
-import MoltenMetal from './components/MoltenMetal';
-
-function AppBackground({ theme }) {
-  const isDark = theme === 'dark';
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-        zIndex: -1,
-        // Respaldo: si WebGL no logra renderizar el canvas, esto se ve en
-        // vez de blanco puro.
-        backgroundColor: isDark ? '#0B0914' : '#F2F2F7',
-      }}
-    >
-      <MoltenMetal
-        color1={isDark ? '#0a0514' : '#5227FF'}
-        color2={isDark ? '#2b1055' : '#FF9FFC'}
-        color3={isDark ? '#9d7fe8' : '#FFFFFF'}
-        speed={isDark ? 0.2 : 0.35}
-        scale={isDark ? 5 : 4}
-        detail={3}
-        glow={isDark ? 0.8 : 1.6}
-        coreSize={isDark ? 0.05 : 0.1}
-        swirl={1}
-        fold={-0.2}
-        blackPoint={isDark ? 0.3 : 0.05}
-        brightness={isDark ? 0.9 : 1.3}
-        colorMode="molten"
-        grain={true}
-        grainIntensity={0.05}
-        mouseInteraction={true}
-        mouseStrength={0.3}
-        opacity={isDark ? 0.85 : 1}
-      />
-    </div>
-  );
-}
-const ACCOUNT_TYPES = [
-  { id: 'efectivo', label: 'Efectivo', icon: Banknote, color: '#7FD17F' },
-  { id: 'debito', label: 'Cuenta de débito', icon: Wallet, color: '#6E9FD1' },
-  { id: 'credito', label: 'Cuenta de crédito', icon: CreditCard, color: '#E3A66A' },
-  { id: 'ahorro', label: 'Ahorro', icon: PiggyBank, color: '#9D7FE8' },
-  { id: 'otro', label: 'Otro', icon: Landmark, color: 'var(--text-secondary)' },
-];
-
-function todayStr() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function formatMXN(n) {
-  const sign = n < 0 ? '-' : '';
-  return sign + '$' + Math.abs(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function formatDateLabel(fecha) {
-  return new Date(fecha + 'T00:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
-}
-
-function typeMeta(typeId) {
-  return ACCOUNT_TYPES.find(t => t.id === typeId) || ACCOUNT_TYPES[4];
-}
-
-function movementDelta(mov, accountType) {
-  if (accountType === 'credito') {
-    return mov.tipo === 'gasto' ? mov.monto : -mov.monto;
-  }
-  return mov.tipo === 'gasto' ? -mov.monto : mov.monto;
-}
+import AppBackground from './components/AppBackground';
+import { LoadingScreen, LoginScreen } from './components/AppScreens';
+import { ACCOUNT_TYPES, formatDateLabel, formatMXN, movementDelta, todayStr, typeMeta } from './lib/finance';
+import { exportStatementPdf } from './lib/pdfExport';
+import { useTrackerData } from './hooks/useTrackerData';
+import AdjustmentModal from './components/AdjustmentModal';
 
 export default function App() {
   const [sesion, setSesion] = useState(null);
   const [checkingSesion, setCheckingSesion] = useState(true);
 
-  const [accounts, setAccounts] = useState([]);
-  const [days, setDays] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState('');
+  const { accounts, days, loading, loadError, setLoadError, loadAll } = useTrackerData(sesion);
 
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [adjustForm, setAdjustForm] = useState({ accountId: '', currentBalance: 0, newBalance: '' });
@@ -110,6 +38,7 @@ export default function App() {
 
   const [pdfRange, setPdfRange] = useState({ start: '', end: '' });
   const [pdfError, setPdfError] = useState('');
+  const movementIdRef = useRef(0);
 
   const [theme, setTheme] = useState(() => localStorage.getItem('tracker-theme') || 'dark');
 
@@ -127,54 +56,15 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSesion(session);
       setCheckingSesion(false);
+    }).catch(() => {
+      setSesion(null);
+      setCheckingSesion(false);
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSesion(session);
     });
     return () => listener.subscription.unsubscribe();
   }, []);
-
-  // 2. Cargar datos cuando hay sesión
-  useEffect(() => {
-    if (sesion) loadAll(sesion.user.id);
-  }, [sesion]);
-
-  async function loadAll(userId) {
-    setLoading(true);
-    setLoadError('');
-    const [cuentasRes, diasRes, transRes] = await Promise.all([
-      supabase.from('cuentas').select('*').eq('user_id', userId).order('created_at', { ascending: true }),
-      supabase.from('dias').select('*').eq('user_id', userId).order('fecha', { ascending: false }),
-      supabase.from('transacciones').select('*').eq('user_id', userId),
-    ]);
-
-    if (cuentasRes.error || diasRes.error || transRes.error) {
-      setLoadError('No se pudieron cargar tus datos. Revisa tu conexión y recarga la página.');
-      setLoading(false);
-      return;
-    }
-
-    setAccounts((cuentasRes.data || []).map(c => ({
-      id: c.id,
-      name: c.nombre,
-      type: c.tipo,
-      initialBalance: Number(c.saldo_inicial) || 0,
-      diaCorte: c.dia_corte || null,
-      diaPago: c.dia_pago || null,
-    })));
-
-    setDays((diasRes.data || []).map(d => ({
-      id: d.id,
-      fecha: d.fecha,
-      sinCambios: d.sin_cambios,
-      nota: d.nota || '',
-      movimientos: (transRes.data || [])
-        .filter(t => t.dia_id === d.id)
-        .map(t => ({ id: t.id, tipo: t.tipo, monto: Number(t.monto), cuentaId: t.cuenta_id, descripcion: t.descripcion || '' })),
-    })));
-
-    setLoading(false);
-  }
 
   const balances = useMemo(() => {
     const map = {};
@@ -218,7 +108,6 @@ export default function App() {
 
   // ---------- Cuentas ----------
   function openNewAccount() {
-    setEditingAccount(null);
     setAccountForm({ name: '', type: 'efectivo', initialBalance: '', diaCorte: '', diaPago: '' });
     setAccountError('');
     setShowAccountModal(true);
@@ -259,10 +148,16 @@ export default function App() {
 
   async function removeAccount(id) {
     const usedIn = days.some(d => (d.movimientos || []).some(m => m.cuentaId === id));
-    if (usedIn && !window.confirm('Esta cuenta ya tiene movimientos registrados. Si la eliminas, esos movimientos se quedarán sin cuenta asociada. ¿Eliminar de todas formas?')) {
+    if (usedIn) {
+      window.alert('No puedes eliminar una cuenta con movimientos registrados. Conserva el historial o elimina primero esos movimientos.');
       return;
     }
-    await supabase.from('cuentas').delete().eq('id', id);
+    if (!window.confirm('¿Eliminar esta cuenta?')) return;
+    const { error } = await supabase.from('cuentas').delete().eq('id', id);
+    if (error) {
+      setLoadError('No se pudo eliminar la cuenta. Inténtalo de nuevo.');
+      return;
+    }
     loadAll(sesion.user.id);
   }
   // ---------- Ajuste Automático ----------
@@ -276,7 +171,7 @@ export default function App() {
   async function saveAdjustment(e) {
     e.preventDefault();
     const newBal = parseFloat(adjustForm.newBalance);
-    if (isNaN(newBal) || newBal < 0) {
+    if (!Number.isFinite(newBal)) {
       setAdjustError('Ingresa un monto válido');
       return;
     }
@@ -291,14 +186,19 @@ export default function App() {
     setAdjustError('');
 
     const today = todayStr();
-    let dayId = null;
     let dayRecord = days.find(d => d.fecha === today);
+    let dayId;
 
     // Si el día ya existe, lo usamos. Si no, lo creamos.
     if (dayRecord) {
       dayId = dayRecord.id;
       if (dayRecord.sinCambios) {
-        await supabase.from('dias').update({ sin_cambios: false }).eq('id', dayId);
+        const { error } = await supabase.from('dias').update({ sin_cambios: false }).eq('id', dayId);
+        if (error) {
+          setAdjustError('No se pudo preparar el registro del día.');
+          setSavingAdjust(false);
+          return;
+        }
       }
     } else {
       const { data, error } = await supabase.from('dias').insert([{
@@ -318,6 +218,11 @@ export default function App() {
 
     // Calcular si es ingreso o gasto basándonos en tu lógica actual
     const acc = accounts.find(a => a.id === adjustForm.accountId);
+    if (!acc) {
+      setAdjustError('La cuenta ya no está disponible. Recarga e inténtalo de nuevo.');
+      setSavingAdjust(false);
+      return;
+    }
     const isCredit = acc.type === 'credito';
 
     // Si el balance sube, para cuentas normales es ingreso, para crédito es gasto (más deuda)
@@ -346,7 +251,8 @@ export default function App() {
 
   // ---------- Registro diario ----------
   function blankMovLine() {
-    return { id: `tmp_${Date.now()}_${Math.random()}`, tipo: 'gasto', monto: '', cuentaId: accounts[0]?.id || '', descripcion: '' };
+    movementIdRef.current += 1;
+    return { id: `tmp_${movementIdRef.current}`, tipo: 'gasto', monto: '', cuentaId: accounts[0]?.id || '', descripcion: '' };
   }
 
   function openNewDay() {
@@ -411,10 +317,14 @@ export default function App() {
     };
 
     let diaId = editingDayId;
+    const previousMovements = editingDayId
+      ? (days.find(day => day.id === editingDayId)?.movimientos || [])
+      : [];
     if (editingDayId) {
       const { error } = await supabase.from('dias').update(diaPayload).eq('id', editingDayId);
       if (error) { setDayError('No se pudo guardar el día.'); setSavingDay(false); return; }
-      await supabase.from('transacciones').delete().eq('dia_id', editingDayId);
+      const { error: deleteError } = await supabase.from('transacciones').delete().eq('dia_id', editingDayId);
+      if (deleteError) { setDayError('No se pudieron actualizar los movimientos del día.'); setSavingDay(false); return; }
     } else {
       const { data, error } = await supabase.from('dias').insert([diaPayload]).select().single();
       if (error) { setDayError('No se pudo guardar el día.'); setSavingDay(false); return; }
@@ -431,7 +341,21 @@ export default function App() {
         descripcion: m.descripcion,
       }));
       const { error } = await supabase.from('transacciones').insert(rows);
-      if (error) { setDayError('El día se guardó, pero hubo un error al guardar los movimientos.'); setSavingDay(false); return; }
+      if (error) {
+        if (editingDayId && previousMovements.length > 0) {
+          await supabase.from('transacciones').insert(previousMovements.map(m => ({
+            user_id: sesion.user.id,
+            dia_id: editingDayId,
+            cuenta_id: m.cuentaId,
+            tipo: m.tipo,
+            monto: m.monto,
+            descripcion: m.descripcion,
+          })));
+        }
+        setDayError('No se pudieron guardar los movimientos. Se restauró el historial anterior cuando fue posible.');
+        setSavingDay(false);
+        return;
+      }
     }
 
     setSavingDay(false);
@@ -441,79 +365,16 @@ export default function App() {
 
   async function removeDay(id) {
     if (!window.confirm('¿Eliminar este registro del día? Esto también borrará sus movimientos.')) return;
-    await supabase.from('dias').delete().eq('id', id);
+    const { error } = await supabase.from('dias').delete().eq('id', id);
+    if (error) {
+      setLoadError('No se pudo eliminar el registro. Inténtalo de nuevo.');
+      return;
+    }
     loadAll(sesion.user.id);
   }
 
-  function generateStatementPDF() {
-    setPdfError('');
-    if (!pdfRange.start || !pdfRange.end) { setPdfError('Selecciona una fecha inicial y una final'); return; }
-    if (pdfRange.start > pdfRange.end) { setPdfError('La fecha inicial debe ser anterior a la final'); return; }
-
-    // Iteramos día por día usando componentes locales (evita saltos de un día por zona horaria)
-    const [sy, sm, sd] = pdfRange.start.split('-').map(Number);
-    const [ey, em, ed] = pdfRange.end.split('-').map(Number);
-    const cursor = new Date(sy, sm - 1, sd);
-    const endDate = new Date(ey, em - 1, ed);
-
-    const rows = [];
-    let totalIngresos = 0;
-    let totalGastos = 0;
-
-    while (cursor <= endDate) {
-      const fecha = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
-      const dayRecord = days.find(d => d.fecha === fecha);
-
-      if (!dayRecord || dayRecord.sinCambios || (dayRecord.movimientos || []).length === 0) {
-        rows.push([
-          fecha,
-          dayRecord?.sinCambios ? 'Sin cambios' : 'Sin registro',
-          '-',
-          '-',
-          dayRecord?.nota || '',
-        ]);
-      } else {
-        dayRecord.movimientos.forEach((m, idx) => {
-          const acc = accounts.find(a => a.id === m.cuentaId);
-          rows.push([
-            idx === 0 ? fecha : '',
-            `${m.descripcion || (m.tipo === 'gasto' ? 'Gasto' : 'Ingreso')} (${acc ? acc.name : 'Cuenta eliminada'})`,
-            m.tipo === 'ingreso' ? formatMXN(m.monto) : '-',
-            m.tipo === 'gasto' ? formatMXN(m.monto) : '-',
-            idx === 0 ? (dayRecord.nota || '') : '',
-          ]);
-          if (m.tipo === 'ingreso') totalIngresos += m.monto;
-          else totalGastos += m.monto;
-        });
-      }
-      cursor.setDate(cursor.getDate() + 1);
-    }
-
-    const doc = new jsPDF();
-    doc.setFontSize(14);
-    doc.text(`Estado de cuenta: ${pdfRange.start} al ${pdfRange.end}`, 14, 15);
-    doc.setFontSize(9);
-    doc.setTextColor(120);
-    doc.text(`Generado el ${todayStr()} — ${sesion.user.email}`, 14, 21);
-    doc.setTextColor(0);
-
-    autoTable(doc, {
-      startY: 27,
-      head: [['Fecha', 'Concepto', 'Ingreso', 'Gasto', 'Nota del día']],
-      body: rows,
-      theme: 'grid',
-      headStyles: { fillColor: [110, 86, 207] },
-      styles: { fontSize: 8, cellPadding: 3 },
-      columnStyles: { 4: { cellWidth: 45 } },
-    });
-
-    const finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 30;
-    doc.setFontSize(11);
-    doc.text(`Total ingresos: ${formatMXN(totalIngresos)}`, 14, finalY + 10);
-    doc.text(`Total gastos: ${formatMXN(totalGastos)}`, 14, finalY + 17);
-    doc.text(`Balance del periodo: ${formatMXN(totalIngresos - totalGastos)}`, 14, finalY + 24);
-
-    doc.save(`Estado_Cuenta_${pdfRange.start}_al_${pdfRange.end}.pdf`);
+  async function generateStatementPDF() {
+    setPdfError(await exportStatementPdf({ range: pdfRange, days, accounts, email: sesion.user.email }));
   }
 
   function exportBackup() {
@@ -532,9 +393,7 @@ export default function App() {
     return (
       <>
         <AppBackground theme={theme} />
-        <div style={{ minHeight: '100vh', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
-          <div style={{ color: 'var(--text-secondary)' }}>Cargando…</div>
-        </div>
+        <LoadingScreen message="Cargando…" />
       </>
     );
   }
@@ -543,24 +402,7 @@ export default function App() {
     return (
       <>
         <AppBackground theme={theme} />
-        <div style={{ minHeight: '100vh', background: 'transparent', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
-          <button
-            onClick={toggleTheme}
-            style={{ position: 'absolute', top: 20, right: 20, width: 40, height: 40, borderRadius: 20, border: '1px solid var(--card-border)', background: 'var(--card-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 }}
-          >
-            {theme === 'dark' ? <Sun size={16} color="var(--text-primary)" /> : <Moon size={16} color="var(--text-primary)" />}
-          </button>
-          <div style={{ fontSize: 13, letterSpacing: 1.5, color: 'var(--accent)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 10, zIndex: 2 }}>
-            Diario financiero
-          </div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 24px 0', color: 'var(--text-heading)', zIndex: 2 }}>Inicia sesión para continuar</h1>
-          <button
-            onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
-            style={{ padding: '12px 24px', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer', zIndex: 2 }}
-          >
-            Iniciar sesión con Google
-          </button>
-        </div>
+        <LoginScreen theme={theme} onToggleTheme={toggleTheme} onLogin={() => supabase.auth.signInWithOAuth({ provider: 'google' })} />
       </>
     );
   }
@@ -569,9 +411,7 @@ export default function App() {
     return (
       <>
         <AppBackground theme={theme} />
-        <div style={{ minHeight: '100vh', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui' }}>
-          <div style={{ color: 'var(--text-secondary)' }}>Cargando tus datos…</div>
-        </div>
+        <LoadingScreen message="Cargando tus datos…" />
       </>
     );
   }
@@ -676,6 +516,7 @@ export default function App() {
           {accounts.length === 0 ? (
             <div className="card" style={{ padding: 24, marginBottom: 20, textAlign: 'center' }}>
               <div style={{ color: 'var(--text-secondary)', fontSize: 13.5, marginBottom: 12 }}>
+                Crea una cuenta para empezar a registrar tus movimientos.
               </div>
               <button
                 onClick={openNewAccount}
@@ -692,7 +533,7 @@ export default function App() {
                 const bal = balances[acc.id] || 0;
                 const isCredit = acc.type === 'credito';
                 return (
-                  <div key={acc.id} className="card" style={{ padding: 14, position: 'relative' }}>
+                  <div key={acc.id} className="card" style={{ padding: '14px 92px 14px 14px', position: 'relative' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                       <Icon size={14} color={meta.color} />
                       <span style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.2 }}>{acc.name}</span>
@@ -989,7 +830,7 @@ export default function App() {
 
               {!dayForm.sinCambios && (
                 <div style={{ marginBottom: 14 }}>
-                  {dayForm.movimientos.map((m, idx) => (
+                  {dayForm.movimientos.map(m => (
                     <div key={m.id} className="card" style={{ padding: 12, marginBottom: 10, background: 'var(--bg-color)' }}>
                       <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                         <button type="button" onClick={() => updateMovLine(m.id, { tipo: 'gasto' })}
@@ -1065,41 +906,7 @@ export default function App() {
           </div>
         )}
       </div>
-      {/* Modal: Ajuste de Saldo */}
-      {showAdjustModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 20 }} onClick={() => setShowAdjustModal(false)}>
-          <form onSubmit={saveAdjustment} onClick={e => e.stopPropagation()} className="card" style={{ width: '100%', maxWidth: 480, borderRadius: '20px 20px 0 0', padding: 22, paddingBottom: 28 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <span style={{ fontSize: 16, fontWeight: 700 }}>Ajustar saldo real</span>
-              <button type="button" onClick={() => setShowAdjustModal(false)} style={{ background: 'none', border: 'none' }}>
-                <X size={20} color="var(--text-secondary)" />
-              </button>
-            </div>
-
-            <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-              El saldo actual calculado es de <strong style={{ color: 'var(--text-primary)' }}>{formatMXN(adjustForm.currentBalance)}</strong>. <br />
-              Ingresa cuánto dinero tienes realmente y crearemos un movimiento automático para cuadrar tus cuentas.
-            </div>
-
-            <input
-              placeholder="Nuevo saldo exacto (MXN)"
-              type="number"
-              step="0.01"
-              inputMode="decimal"
-              value={adjustForm.newBalance}
-              onChange={e => setAdjustForm(f => ({ ...f, newBalance: e.target.value }))}
-              className="field"
-              style={{ marginBottom: 14 }}
-            />
-
-            {adjustError && <div style={{ color: '#E36A6A', fontSize: 12.5, marginBottom: 10 }}>{adjustError}</div>}
-
-            <button type="submit" disabled={savingAdjust} style={{ width: '100%', padding: 13, borderRadius: 10, border: 'none', background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 14.5, opacity: savingAdjust ? 0.7 : 1 }}>
-              {savingAdjust ? 'Calculando y guardando…' : 'Crear ajuste automático'}
-            </button>
-          </form>
-        </div>
-      )}
+      {showAdjustModal && <AdjustmentModal form={adjustForm} error={adjustError} saving={savingAdjust} onChange={newBalance => setAdjustForm(form => ({ ...form, newBalance }))} onClose={() => setShowAdjustModal(false)} onSubmit={saveAdjustment} />}
     </>
   );
 }
