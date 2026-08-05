@@ -8,10 +8,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient';
 import MoltenMetal from './components/MoltenMetal';
-const [showAdjustModal, setShowAdjustModal] = useState(false);
-const [adjustForm, setAdjustForm] = useState({ accountId: '', currentBalance: 0, newBalance: '' });
-const [adjustError, setAdjustError] = useState('');
-const [savingAdjust, setSavingAdjust] = useState(false);
+
 function AppBackground({ theme }) {
   if (theme !== 'dark') return null;
   return (
@@ -79,6 +76,11 @@ export default function App() {
   const [days, setDays] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
+
+  const [showAdjustModal, setShowAdjustModal] = useState(false);
+  const [adjustForm, setAdjustForm] = useState({ accountId: '', currentBalance: 0, newBalance: '' });
+  const [adjustError, setAdjustError] = useState('');
+  const [savingAdjust, setSavingAdjust] = useState(false);
 
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
